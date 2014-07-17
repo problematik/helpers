@@ -1,0 +1,186 @@
+#!/bin/bash
+#
+# Author: Problematik <info@problematik.si>
+#
+#
+# Based on code by Remigijus Jarmalavičius and Nikolaos Dimopoulos
+# http://www.niden.net/2011/11/git-pre-commit-another-check-to-ensure.html?q=pre+commit
+#
+# expressions the files to be committed for the presence of print_r(),
+# var_dump(), die()
+# The array below can be extended for further expressions
+# \<beseda\> je word boundr namesto \b
+# pisava je z http://patorjk.com/software/taag/#p=display&f=Bubble&t=PRE-COMMIT%20PREGLED
+# da bi preveril še ce je uporaba vseh Log ali pa new Log deklerirana zgoraj... <- to je bolj stvar testiranja?
+
+echo -n "$(tput setaf 2)
+ ██████╗ ██████╗ ██████╗ ███████╗     ██████╗██╗  ██╗███████╗ ██████╗██╗  ██╗██╗   ██╗██████╗ 
+██╔════╝██╔═══██╗██╔══██╗██╔════╝    ██╔════╝██║  ██║██╔════╝██╔════╝██║ ██╔╝██║   ██║██╔══██╗
+██║     ██║   ██║██║  ██║█████╗      ██║     ███████║█████╗  ██║     █████╔╝ ██║   ██║██████╔╝
+██║     ██║   ██║██║  ██║██╔══╝      ██║     ██╔══██║██╔══╝  ██║     ██╔═██╗ ██║   ██║██╔═══╝ 
+╚██████╗╚██████╔╝██████╔╝███████╗    ╚██████╗██║  ██║███████╗╚██████╗██║  ██╗╚██████╔╝██║     
+ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝     ╚═════╝╚═╝  ╚═╝╚══════╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     
+$(tput sgr0)"
+
+
+##########################
+# definiramo expressione #
+##########################
+expressions[1]="/\<var_dump\>/"
+expressions[2]="/\<print_r\>/"
+expressions[3]="/\<die\>/"
+expressions[4]="/\<dd\>/"
+expressions[5]="/\<echo\>/"
+expressions[6]="/FIX/"
+expressions[7]="/\?>/"
+expressions[8]="/TODO/"
+expressions[9]="/<<<<<<</"
+expressions[10]="/>>>>>>>/"
+expressions[11]="/NOTE/"
+
+# kateri izmed teh nas zanimajo samo če nastopajo kot komentar
+validIfComment[6]="yes"
+validIfComment[8]="yes"
+validIfComment[11]="yes"
+
+# če bi radi da prikaze se naslednjo vrstico
+showNextLineAlso[6]="yes"
+showNextLineAlso[8]="yes"
+showNextLineAlso[11]="yes"
+
+# warning only - kljub temu naredi commit
+warningOnly[8]="yes"
+warningOnly[11]="yes"
+
+# Introduction text
+echo
+printf "V kodi iscem: "
+
+index=1
+element_count=${#expressions[@]}
+let "element_count = $element_count + 1"
+while [ "$index" -lt "$element_count" ]
+do
+    CURRENT_EXPRESSION=${expressions[$index]}
+    if [ "$index" = 1 ]; then
+        printf "$(tput setaf 6)%s$(tput sgr0)" $CURRENT_EXPRESSION
+    else
+        printf "$(tput setaf 6)%-13s %s$(tput sgr0)" "" $CURRENT_EXPRESSION
+    fi
+    let "index = $index + 1"
+
+    echo
+done
+
+# katere datoteke nas zanimajo
+
+file_count=$(git diff --cached --name-only --diff-filter=ACMR | wc -l)
+echo
+echo -n "Stevilo datotek za preverit: $(tput bold)$(tput setaf 3)$file_count$(tput sgr0)"
+echo
+echo "-----------------------------------------------------------------------"
+
+# Kam zapisujem errorje
+ERRORS_BUFFER=""
+WARNING_BUFFER=""
+ROOT_DIR="$(pwd)/"
+# dobimo vse fajle
+FILE_LIST=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# zacnemo z preverjanjem
+for file in $FILE_LIST
+do
+    EXTENSION=$(echo "$file" | grep ".php$")
+    if [ "$EXTENSION" != "" ]; then
+        index=1
+        printf "\nPreverjam: %s\n" $file
+        while [ "$index" -lt "$element_count" ]
+        do
+            CURRENT_EXPRESSION=${expressions[$index]}
+            if [ "${showNextLineAlso[$index]}" != "" ]; then
+                FIRST_ERRORS=$(git diff --cached $file | gawk 'match($0,  '$CURRENT_EXPRESSION') {print $0; getline; print $0}')
+            else
+                FIRST_ERRORS=$(git diff --cached $file | gawk 'match($0,  '$CURRENT_EXPRESSION') {print $0}')
+            fi
+
+            # ker iscemo samo stvari, ki smo jih dodali, ne zanimajo nas stvari ki so bile odstranjene iz dokumenta
+            FIRST_LETTER=${FIRST_ERRORS::1}
+
+            if [ "$FIRST_ERRORS" != "" ] && [ "$FIRST_LETTER" = "+" ]; then
+            	ERRORS=$(git diff --cached $file | gawk 'match($0, '$CURRENT_EXPRESSION') {print $0}' | awk '$0 !~ /\/\//')
+            	if [ "$ERRORS" != "" ] || [ "${validIfComment[$index]}" != "" ]; then
+
+                    if [ "${warningOnly[$index]}" != "yes" ]; then
+                        # če mora biti v komentu, pomeni da je ERRORS prazen
+                        if [ "${validIfComment[$index]}" != "" ] && [ "$ERRORS" = "" ]; then
+                            ERRORS=$FIRST_ERRORS
+                        fi
+
+                        if [ "$ERRORS_BUFFER" != "" ]; then
+                            ERRORS_BUFFER="$ERRORS_BUFFER\n$CURRENT_EXPRESSION - $file: $ERRORS"
+                        else
+                            ERRORS_BUFFER="$CURRENT_EXPRESSION - $file: $ERRORS"
+                        fi
+                        printf "$(tput bold)$(tput setaf 1)E$(tput sgr0)"
+                    else
+                        if [ "$WARNING_BUFFER" != "" ]; then
+                            WARNING_BUFFER="$WARNING_BUFFER\n$CURRENT_EXPRESSION - $file: $FIRST_ERRORS"
+                        else
+                            WARNING_BUFFER="$CURRENT_EXPRESSION - $file: $FIRST_ERRORS"
+                        fi
+                        printf "$(tput bold)$(tput setaf 1)W$(tput sgr0)"
+                    fi
+
+                fi
+            else
+                printf "$(tput bold)$(tput setaf 2).$(tput sgr0)"
+            fi
+            let "index = $index + 1"
+        done
+    fi
+done
+
+if [ "$ERRORS_BUFFER" != "" ]; then
+    echo
+    echo
+    echo
+    echo -n "$(tput bold)$(tput setaf 3)"
+    echo "Commit ni uspel! "
+    echo
+    echo "-----------------------------------------------------------------------"
+    echo -n "$(tput bold)$(tput setaf 1)"
+    echo -e $ERRORS_BUFFER
+    echo -n "$(tput bold)$(tput setaf 3)"
+    echo "-----------------------------------------------------------------------"
+    echo
+    echo "Popravi in poizkusi znova"
+    echo -n "$(tput sgr0)"
+    exit 1
+else
+    if [ "$WARNING_BUFFER" != "" ]; then
+        echo
+        echo
+        echo
+        echo -n "$(tput bold)$(tput setaf 3)"
+        echo "Pazi, v commit so prisle naslednje stvari!"
+        echo
+        echo "-----------------------------------------------------------------------"
+        echo -n "$(tput bold)$(tput setaf 1)"
+        echo -e $WARNING_BUFFER
+        echo -n "$(tput bold)$(tput setaf 3)"
+        echo "-----------------------------------------------------------------------"
+        echo -n  "$(tput sgr0)"
+
+        echo
+        read -e -p "Ali naj kljub temu commitam?: " -i "y" odg < /dev/tty
+        if [ "$odg" != "y" ]; then
+            echo
+            echo -n "$(tput bold)$(tput setaf 1)Prekinjam operacijo$(tput sgr0)"
+            echo
+            exit 1
+        fi
+    fi
+
+    echo
+    echo "$(tput bold)$(tput setaf 2)Commit uspel$(tput sgr0)"
+fi
